@@ -4,42 +4,70 @@ local Players = game:GetService("Players")
 local player = Players.LocalPlayer
 local key = getgenv().Key
 
+-- Không có key → kick
 if type(key) ~= "string" or key == "" then
     player:Kick("Chưa nhập license key.")
     return
 end
 
-local deviceId = "roblox-user-" .. tostring(player.UserId)
+local httpFn =
+    (typeof(request) == "function" and request)
+    or (typeof(http_request) == "function" and http_request)
+    or (syn and syn.request)
+    or (http and http.request)
+
+if not httpFn then
+    player:Kick("Executor không hỗ trợ HTTP request.")
+    return
+end
 
 local body = HttpService:JSONEncode({
     key = key,
-    deviceId = deviceId
+    deviceId = "roblox-user-" .. tostring(player.UserId)
 })
 
-local httpFn = (typeof(request) == "function" and request) or http_request
+-- Retry để chịu được Render cold start
+local response
+for attempt = 1, 5 do
+    local ok, res = pcall(function()
+        return httpFn({
+            Url = "https://key-system-not7.onrender.com/api/v1/license/verify",
+            Method = "POST",
+            Headers = { ["Content-Type"] = "application/json" },
+            Body = body
+        })
+    end)
 
-local success, response = pcall(function()
-    return httpFn({
-        Url = "https://key-system-not7.onrender.com/api/v1/license/verify",
-        Method = "POST",
-        Headers = {
-            ["Content-Type"] = "application/json"
-        },
-        Body = body
-    })
-end)
+    if ok and res and res.Body then
+        response = res
+        break
+    end
 
-if not success or not response or not response.Success then
+    warn(("[License] Lần %d/5 không kết nối được, thử lại sau 3s..."):format(attempt))
+    task.wait(3)
+end
+
+if not response then
     player:Kick("Không thể kết nối license server.")
     return
 end
 
-local ok, result = pcall(function()
-    return HttpService:JSONDecode(response.Body)
-end)
+local result
+if type(response.Body) == "table" then
+    result = response.Body
+else
+    local okDecode, decoded = pcall(HttpService.JSONDecode, HttpService, response.Body)
+    result = okDecode and decoded or nil
+end
 
-if not ok or not result or result.valid ~= true then
-    player:Kick("Key không hợp lệ: " .. tostring(result and result.reason or "unknown"))
+-- Server trả rõ ràng key sai → kick
+if type(result) ~= "table" then
+    player:Kick("License server trả response không hợp lệ.")
+    return
+end
+
+if result.valid ~= true then
+    player:Kick("Key không hợp lệ: " .. tostring(result.reason or "unknown"))
     return
 end
 
