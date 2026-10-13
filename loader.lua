@@ -206,8 +206,38 @@ if not result then
     return
 end
 
-if result.success ~= true or type(result.licenseToken) ~= "string" then
+if result.success ~= true then
     _Kick(player, "Key không hợp lệ: " .. tostring(result.reason or "unknown"))
+    return
+end
+
+if result.status == "exhausted" or result.remainingUses == 0 then
+    _Kick(player, "Key đã hết lượt sử dụng (" .. tostring(result.usedCount or 0) .. "/" .. tostring(result.maxUses or 0) .. ").")
+    return
+end
+
+if result.status == "expired" then
+    _Kick(player, "Key đã hết hạn.")
+    return
+end
+
+if result.status == "banned" or result.status == "revoked" then
+    _Kick(player, "Key đã bị vô hiệu hoá.")
+    return
+end
+
+if result.expiresAt then
+    local ok, expireTime = pcall(function()
+        return DateTime.fromIsoDate(result.expiresAt).UnixTimestamp
+    end)
+    if ok and expireTime and os.time() > expireTime then
+        _Kick(player, "Key đã hết hạn.")
+        return
+    end
+end
+
+if type(result.licenseToken) ~= "string" then
+    _Kick(player, "Server không trả về license token.")
     return
 end
 
