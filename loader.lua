@@ -112,32 +112,27 @@ if type(key) ~= "string" or key == "" then
     return
 end
 
-local VERIFY_URL = "https://key-system-not7.onrender.com/api/v1/license/verify"
+key = key:lower():gsub("%s+", "")
 
-local body = _JSONEncode({
-    key = key,
-    deviceId = "roblox-user-" .. tostring(player.UserId)
-})
+if #key ~= 24 or not key:match("^[a-z0-9]+$") then
+    player:Kick("Key phải gồm đúng 24 ký tự chữ thường và số.")
+    return
+end
 
-local function doVerify()
-    local ok, res = pcall(function()
-        return _request({
-            Url = VERIFY_URL,
-            Method = "POST",
-            Headers = { ["Content-Type"] = "application/json" },
-            Body = body
-        })
-    end)
+local API_BASE = "https://key-system-not7.onrender.com/api/v1/license"
+local deviceId = "roblox-user-" .. tostring(player.UserId)
+local licenseToken
 
-    if not ok or not res or not res.Body then
+local function decodeResponse(response)
+    if not response or not response.Body then
         return nil, "no_response"
     end
 
     local result
-    if type(res.Body) == "table" then
-        result = res.Body
+    if type(response.Body) == "table" then
+        result = response.Body
     else
-        local okDecode, decoded = pcall(_JSONDecode, HttpService, res.Body)
+        local okDecode, decoded = pcall(_JSONDecode, HttpService, response.Body)
         result = okDecode and decoded or nil
     end
 
@@ -148,13 +143,35 @@ local function doVerify()
     return result
 end
 
+local function post(endpoint, payload)
+    local ok, response = pcall(function()
+        return _request({
+            Url = API_BASE .. endpoint,
+            Method = "POST",
+            Headers = { ["Content-Type"] = "application/json" },
+            Body = _JSONEncode(payload)
+        })
+    end)
+
+    if not ok then
+        return nil, "request_failed"
+    end
+
+    return decodeResponse(response)
+end
+
 local result
 for attempt = 1, 5 do
-    local r, err = doVerify()
+    local r, err = post("/activate", {
+        key = key,
+        deviceId = deviceId
+    })
+
     if r then
         result = r
         break
     end
+
     warn(("[License] Lần %d/5 thất bại (%s), thử lại sau 3s..."):format(attempt, tostring(err)))
     task.wait(3)
 end
@@ -164,10 +181,12 @@ if not result then
     return
 end
 
-if result.valid ~= true then
+if result.success ~= true or type(result.licenseToken) ~= "string" then
     player:Kick("Key không hợp lệ: " .. tostring(result.reason or "unknown"))
     return
 end
+
+licenseToken = result.licenseToken
 
 task.spawn(function()
     local failCount = 0
@@ -182,9 +201,12 @@ task.spawn(function()
             return
         end
 
-        local r, err = doVerify()
+        local heartbeat, err = post("/heartbeat", {
+            licenseToken = licenseToken,
+            deviceId = deviceId
+        })
 
-        if not r then
+        if not heartbeat then
             failCount += 1
             warn(("[License] Heartbeat thất bại lần %d (%s)"):format(failCount, tostring(err)))
 
@@ -195,8 +217,8 @@ task.spawn(function()
         else
             failCount = 0
 
-            if r.valid ~= true then
-                player:Kick("License đã bị thu hồi: " .. tostring(r.reason or "unknown"))
+            if heartbeat.valid ~= true then
+                player:Kick("License không còn hợp lệ: " .. tostring(heartbeat.reason or "unknown"))
                 return
             end
         end
