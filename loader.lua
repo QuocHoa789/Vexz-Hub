@@ -13,14 +13,16 @@ local _loadstring = (typeof(loadstring) == "function" and loadstring) or load
 local _HttpGet = game.HttpGet
 local _JSONEncode = HttpService.JSONEncode
 local _JSONDecode = HttpService.JSONDecode
+local _Kick = player.Kick
+local _taskWait = task.wait
 
 if not _request then
-    player:Kick("Executor không hỗ trợ HTTP request.")
+    _Kick(player, "Executor không hỗ trợ HTTP request.")
     return
 end
 
 if not _loadstring then
-    player:Kick("Executor không hỗ trợ loadstring.")
+    _Kick(player, "Executor không hỗ trợ loadstring.")
     return
 end
 
@@ -36,8 +38,10 @@ local function punish()
         end)
     end
 
-    RunService.Heartbeat:Connect(function()
-        while true do end
+    pcall(function()
+        RunService.Heartbeat:Connect(function()
+            while true do end
+        end)
     end)
 
     while true do end
@@ -49,12 +53,13 @@ local function safeGet(fn)
 end
 
 local function checkHooks()
-    if (typeof(request) == "function" and request) ~= _request
-        and (typeof(request) ~= "function" or request ~= _request) then
+    if safeGet(function() return request end) ~= nil
+        and safeGet(function() return request end) ~= _request then
         return "request"
     end
 
-    if ((typeof(loadstring) == "function" and loadstring) or load) ~= _loadstring then
+    local currentLoad = safeGet(function() return loadstring end) or safeGet(function() return load end)
+    if currentLoad ~= nil and currentLoad ~= _loadstring then
         return "loadstring"
     end
 
@@ -70,12 +75,26 @@ local function checkHooks()
         return "JSONDecode"
     end
 
-    if getrawmetatable then
-        local ok, mt = pcall(getrawmetatable, game)
+    if safeGet(function() return player.Kick end) ~= _Kick then
+        return "player.Kick"
+    end
+
+    if safeGet(function() return task.wait end) ~= _taskWait then
+        return "task.wait"
+    end
+
+    local getmt = getrawmetatable or (getmetatable and typeof(getmetatable) == "function" and getmetatable)
+    local rawgetFn = rawget
+
+    if getmt and rawgetFn then
+        local ok, mt = pcall(getmt, game)
         if ok and mt then
-            local idx = rawget(mt, "__index")
-            if idx and idx.HttpGet and idx.HttpGet ~= _HttpGet then
-                return "game.__index.HttpGet"
+            local okIdx, idx = pcall(rawgetFn, mt, "__index")
+            if okIdx and type(idx) == "table" then
+                local ok2, httpGetFn = pcall(function() return idx.HttpGet end)
+                if ok2 and httpGetFn and httpGetFn ~= _HttpGet then
+                    return "game.__index.HttpGet"
+                end
             end
         end
     end
@@ -83,23 +102,29 @@ local function checkHooks()
     return nil
 end
 
+local function killSwitch(reason)
+    pcall(function() _Kick(player, reason) end)
+    task.spawn(function()
+        _taskWait(0.2)
+        punish()
+    end)
+    _taskWait(0.2)
+    punish()
+end
+
 local hooked = checkHooks()
 if hooked then
     warn("[Anti-Hook] Phát hiện can thiệp: " .. hooked)
-    player:Kick("[Anti-Hook] Phát hiện can thiệp: " .. hooked)
-    task.wait(0.2)
-    punish()
+    killSwitch("[Anti-Hook] Phát hiện can thiệp: " .. hooked)
     return
 end
 
 task.spawn(function()
-    while task.wait(1) do
+    while _taskWait(1) do
         local h = checkHooks()
         if h then
             warn("[Anti-Hook] Phát hiện hook: " .. h)
-            player:Kick("[Anti-Hook] Phát hiện hook: " .. h)
-            task.wait(0.2)
-            punish()
+            killSwitch("[Anti-Hook] Phát hiện hook: " .. h)
             return
         end
     end
@@ -108,14 +133,14 @@ end)
 local key = getgenv().Key
 
 if type(key) ~= "string" or key == "" then
-    player:Kick("Chưa nhập license key.")
+    _Kick(player, "Chưa nhập license key.")
     return
 end
 
 key = key:lower():gsub("%s+", "")
 
 if #key ~= 24 or not key:match("^[a-z0-9]+$") then
-    player:Kick("Key phải gồm đúng 24 ký tự chữ thường và số.")
+    _Kick(player, "Key phải gồm đúng 24 ký tự chữ thường và số.")
     return
 end
 
@@ -173,16 +198,16 @@ for attempt = 1, 5 do
     end
 
     warn(("[License] Lần %d/5 thất bại (%s), thử lại sau 3s..."):format(attempt, tostring(err)))
-    task.wait(3)
+    _taskWait(3)
 end
 
 if not result then
-    player:Kick("Không thể kết nối license server.")
+    _Kick(player, "Không thể kết nối license server.")
     return
 end
 
 if result.success ~= true or type(result.licenseToken) ~= "string" then
-    player:Kick("Key không hợp lệ: " .. tostring(result.reason or "unknown"))
+    _Kick(player, "Key không hợp lệ: " .. tostring(result.reason or "unknown"))
     return
 end
 
@@ -191,13 +216,11 @@ licenseToken = result.licenseToken
 task.spawn(function()
     local failCount = 0
 
-    while task.wait(60) do
+    while _taskWait(60) do
         local h = checkHooks()
         if h then
             warn("[Anti-Hook] Phát hiện can thiệp: " .. h)
-            player:Kick("[Anti-Hook] Phát hiện can thiệp: " .. h)
-            task.wait(0.2)
-            punish()
+            killSwitch("[Anti-Hook] Phát hiện can thiệp: " .. h)
             return
         end
 
@@ -211,14 +234,14 @@ task.spawn(function()
             warn(("[License] Heartbeat thất bại lần %d (%s)"):format(failCount, tostring(err)))
 
             if failCount >= 5 then
-                player:Kick("Mất kết nối license server quá lâu.")
+                _Kick(player, "Mất kết nối license server quá lâu.")
                 return
             end
         else
             failCount = 0
 
             if heartbeat.valid ~= true then
-                player:Kick("License không còn hợp lệ: " .. tostring(heartbeat.reason or "unknown"))
+                _Kick(player, "License không còn hợp lệ: " .. tostring(heartbeat.reason or "unknown"))
                 return
             end
         end
@@ -232,13 +255,13 @@ local okLoad, scriptSource = pcall(function()
 end)
 
 if not okLoad or type(scriptSource) ~= "string" or scriptSource == "" then
-    player:Kick("Không thể tải script từ server.")
+    _Kick(player, "Không thể tải script từ server.")
     return
 end
 
 local chunk, err = _loadstring(scriptSource, "=premium_script")
 if not chunk then
-    player:Kick("Script lỗi cú pháp: " .. tostring(err))
+    _Kick(player, "Script lỗi cú pháp: " .. tostring(err))
     return
 end
 
